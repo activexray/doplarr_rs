@@ -139,7 +139,26 @@ impl SearchGet200ResponseResultsInner {
 #[cfg(test)]
 mod tests {
     use super::SearchResultId;
-    use crate::models::SearchGet200Response;
+    use crate::models::{MediaRequest, SearchGet200Response};
+
+    fn request_without_user_emails() -> serde_json::Value {
+        serde_json::json!({
+            "id": 42,
+            "status": 2,
+            "requestedBy": {
+                "id": 1,
+                "username": "reader",
+                "createdAt": "2026-08-05T00:00:00.000Z",
+                "updatedAt": "2026-08-05T00:00:00.000Z"
+            },
+            "modifiedBy": {
+                "id": 1,
+                "username": "reader",
+                "createdAt": "2026-08-05T00:00:00.000Z",
+                "updatedAt": "2026-08-05T00:00:00.000Z"
+            }
+        })
+    }
 
     #[test]
     fn mixed_search_supports_numeric_and_provider_ids() {
@@ -167,5 +186,45 @@ mod tests {
         assert_eq!(results[2].id, SearchResultId::String("OL45804W".into()));
         assert_eq!(results[2].author.as_deref(), Some("Ursula K. Le Guin"));
         assert_eq!(results[2].isbn13.as_deref(), Some("9780441478125"));
+    }
+
+    #[test]
+    fn seerrng_request_users_may_omit_email() {
+        let request: MediaRequest = serde_json::from_value(request_without_user_emails())
+            .expect("SeerrNG book request response should deserialize without user emails");
+        assert!(request.requested_by.unwrap().email.is_none());
+        assert!(request.modified_by.unwrap().email.is_none());
+
+        let response: SearchGet200Response = serde_json::from_value(serde_json::json!({
+            "results": [{
+                "id": "OL123W",
+                "mediaType": "book",
+                "title": "Scale",
+                "mediaInfo": {
+                    "id": 7,
+                    "status": 2,
+                    "requests": [request_without_user_emails()],
+                    "createdAt": "2026-08-05T00:00:00.000Z",
+                    "updatedAt": "2026-08-05T00:00:00.000Z"
+                }
+            }]
+        }))
+        .expect("SeerrNG search response should deserialize without user emails");
+
+        let results = response.results.unwrap();
+        let nested_request = &results[0]
+            .media_info
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()[0];
+        assert!(nested_request
+            .requested_by
+            .as_ref()
+            .unwrap()
+            .email
+            .is_none());
+        assert!(nested_request.modified_by.as_ref().unwrap().email.is_none());
     }
 }

@@ -370,7 +370,11 @@ impl MediaBackend for Seerr {
         match result.media_type.as_str() {
             "movie" => (2.0..=5.0).contains(&status),
             "tv" => status == 5.0,
-            "book" => status == 5.0,
+            // Books are single-item requests, so pending, processing, partially
+            // available, and available all mean another request would be a
+            // duplicate. This mirrors movie handling; TV remains special
+            // because a user may still request unrequested seasons.
+            "book" => (2.0..=5.0).contains(&status),
             _ => false,
         }
     }
@@ -909,5 +913,29 @@ mod tests {
             message.thumbnail_url.as_deref(),
             Some("https://covers.openlibrary.org/b/id/1-L.jpg")
         );
+    }
+
+    #[test]
+    fn pending_or_processing_books_stop_before_duplicate_request() {
+        let backend = backend(Some(BookFormat::Audiobook));
+
+        for status in [2.0, 3.0, 4.0, 5.0] {
+            let mut result = book_result();
+            let mut info = seerr_api::models::MediaInfo::new();
+            info.status = Some(status);
+            result.media_info = Some(Box::new(info));
+            assert!(backend.early_stop(&result), "status {status} should stop");
+        }
+
+        for status in [1.0, 6.0] {
+            let mut result = book_result();
+            let mut info = seerr_api::models::MediaInfo::new();
+            info.status = Some(status);
+            result.media_info = Some(Box::new(info));
+            assert!(
+                !backend.early_stop(&result),
+                "status {status} should allow a request"
+            );
+        }
     }
 }

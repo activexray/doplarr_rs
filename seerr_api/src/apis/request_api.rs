@@ -236,7 +236,13 @@ pub async fn request_post(
     if let Some(user_id) = x_api_user {
         req_builder = req_builder.header("X-API-User", user_id.to_string());
     }
-    req_builder = req_builder.json(&p_body_request_post_request);
+    // HAND-PATCHED: SeerrNG can synchronously retry Bookshelf metadata lookups
+    // for roughly 45 seconds before accepting the request into its durable
+    // dispatch queue. Override the shared client's 30-second deadline for this
+    // mutation only; fast search and status calls retain the shorter timeout.
+    req_builder = req_builder
+        .timeout(std::time::Duration::from_secs(90))
+        .json(&p_body_request_post_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;

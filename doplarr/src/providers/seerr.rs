@@ -364,17 +364,27 @@ impl MediaBackend for Seerr {
         let Some(ref info) = result.media_info else {
             return false;
         };
-        let Some(status) = info.status else {
-            return false;
-        };
         match result.media_type.as_str() {
-            "movie" => (2.0..=5.0).contains(&status),
-            "tv" => status == 5.0,
+            "movie" => info
+                .status
+                .is_some_and(|status| (2.0..=5.0).contains(&status)),
+            "tv" => info.status == Some(5.0),
             // Books are single-item requests, so pending, processing, partially
             // available, and available all mean another request would be a
-            // duplicate. This mirrors movie handling; TV remains special
-            // because a user may still request unrequested seasons.
-            "book" => (2.0..=5.0).contains(&status),
+            // duplicate. SeerrNG can leave media status UNKNOWN while an
+            // approved request is queued, so also inspect its nested request
+            // statuses (1 = pending approval, 2 = approved). This mirrors
+            // movie handling; TV remains special because a user may still
+            // request unrequested seasons.
+            "book" => {
+                info.status
+                    .is_some_and(|status| (2.0..=5.0).contains(&status))
+                    || info.requests.as_ref().is_some_and(|requests| {
+                        requests
+                            .iter()
+                            .any(|request| matches!(request.status, 1.0 | 2.0))
+                    })
+            }
             _ => false,
         }
     }
@@ -937,5 +947,32 @@ mod tests {
                 "status {status} should allow a request"
             );
         }
+    }
+
+    #[test]
+    fn active_nested_book_request_stops_when_media_status_is_unknown() {
+        let backend = backend(Some(BookFormat::Audiobook));
+
+        for request_status in [1.0, 2.0] {
+            let mut result = book_result();
+            let mut info = seerr_api::models::MediaInfo::new();
+            info.status = Some(1.0);
+            info.requests = Some(vec![seerr_api::models::MediaRequest::new(
+                98.0,
+                request_status,
+            )]);
+            result.media_info = Some(Box::new(info));
+            assert!(
+                backend.early_stop(&result),
+                "request status {request_status} should stop"
+            );
+        }
+
+        let mut declined = book_result();
+        let mut info = seerr_api::models::MediaInfo::new();
+        info.status = Some(1.0);
+        info.requests = Some(vec![seerr_api::models::MediaRequest::new(98.0, 3.0)]);
+        declined.media_info = Some(Box::new(info));
+        assert!(!backend.early_stop(&declined));
     }
 }

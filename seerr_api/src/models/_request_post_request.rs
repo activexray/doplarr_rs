@@ -13,10 +13,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RequestPostRequest {
+    // HAND-PATCHED: SeerrNG book requests use string Open Library IDs, while
+    // upstream Seerr movie and TV requests use numeric TMDB IDs.
     #[serde(rename = "mediaType")]
     pub media_type: MediaType,
     #[serde(rename = "mediaId")]
-    pub media_id: f64,
+    pub media_id: serde_json::Value,
     #[serde(rename = "tvdbId", skip_serializing_if = "Option::is_none")]
     pub tvdb_id: Option<f64>,
     #[serde(rename = "seasons", skip_serializing_if = "Option::is_none")]
@@ -31,6 +33,15 @@ pub struct RequestPostRequest {
     pub root_folder: Option<String>,
     #[serde(rename = "languageProfileId", skip_serializing_if = "Option::is_none")]
     pub language_profile_id: Option<f64>,
+    // HAND-PATCHED: book request fields supported by SeerrNG.
+    #[serde(rename = "format", skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(rename = "editionId", skip_serializing_if = "Option::is_none")]
+    pub edition_id: Option<String>,
+    #[serde(rename = "isbn13", skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
+    #[serde(rename = "authorId", skip_serializing_if = "Option::is_none")]
+    pub author_id: Option<String>,
     #[serde(
         rename = "userId",
         default,
@@ -41,10 +52,13 @@ pub struct RequestPostRequest {
 }
 
 impl RequestPostRequest {
-    pub fn new(media_type: MediaType, media_id: f64) -> RequestPostRequest {
+    pub fn new(
+        media_type: MediaType,
+        media_id: impl Into<serde_json::Value>,
+    ) -> RequestPostRequest {
         RequestPostRequest {
             media_type,
-            media_id,
+            media_id: media_id.into(),
             tvdb_id: None,
             seasons: None,
             is4k: None,
@@ -52,6 +66,10 @@ impl RequestPostRequest {
             profile_id: None,
             root_folder: None,
             language_profile_id: None,
+            format: None,
+            edition_id: None,
+            isbn13: None,
+            author_id: None,
             user_id: None,
         }
     }
@@ -63,10 +81,44 @@ pub enum MediaType {
     Movie,
     #[serde(rename = "tv")]
     Tv,
+    #[serde(rename = "book")]
+    Book,
 }
 
 impl Default for MediaType {
     fn default() -> MediaType {
         Self::Movie
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaType, RequestPostRequest};
+
+    #[test]
+    fn serializes_seerrng_book_request_fields() {
+        let mut request = RequestPostRequest::new(MediaType::Book, "OL45804W");
+        request.format = Some("audiobook".into());
+        request.isbn13 = Some("9780441478125".into());
+        request.edition_id = Some("OL1M".into());
+        request.author_id = Some("OL21879A".into());
+
+        let value = serde_json::to_value(request).expect("book request should serialize");
+        assert_eq!(value["mediaType"], "book");
+        assert_eq!(value["mediaId"], "OL45804W");
+        assert_eq!(value["format"], "audiobook");
+        assert_eq!(value["isbn13"], "9780441478125");
+        assert_eq!(value["editionId"], "OL1M");
+        assert_eq!(value["authorId"], "OL21879A");
+    }
+
+    #[test]
+    fn preserves_numeric_movie_request_ids() {
+        let request = RequestPostRequest::new(MediaType::Movie, 603.0);
+        let value = serde_json::to_value(request).expect("movie request should serialize");
+
+        assert_eq!(value["mediaType"], "movie");
+        assert_eq!(value["mediaId"], 603.0);
+        assert!(value.get("format").is_none());
     }
 }

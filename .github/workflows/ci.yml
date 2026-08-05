@@ -13,6 +13,11 @@ on:
         branches: [main]
         paths-ignore: *docs-paths
     workflow_dispatch:
+        inputs:
+            image_tag:
+                description: Optional GHCR tag to build and publish
+                required: false
+                type: string
 
 # Cancel superseded runs for the same branch/PR - these nix jobs are heavy.
 concurrency:
@@ -64,7 +69,11 @@ jobs:
         name: Build and Push Docker Image
         needs: check
         runs-on: ubuntu-latest
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+            (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+            (github.event_name == 'workflow_dispatch' && inputs.image_tag != '')
+        env:
+            IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || 'main' }}
         steps:
             - name: Checkout repository
               uses: actions/checkout@v6
@@ -89,5 +98,5 @@ jobs:
 
             - name: Push Docker image
               run: |
-                  docker tag ghcr.io/activexray/doplarr_rs:latest ghcr.io/activexray/doplarr_rs:main
-                  docker push ghcr.io/activexray/doplarr_rs:main
+                  docker tag ghcr.io/activexray/doplarr_rs:latest ghcr.io/${{ github.repository_owner }}/doplarr_rs:${IMAGE_TAG}
+                  docker push ghcr.io/${{ github.repository_owner }}/doplarr_rs:${IMAGE_TAG}

@@ -23,6 +23,25 @@ pub struct Backend {
 pub enum MediaKind {
     Movie,
     Tv,
+    Book,
+}
+
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum BookFormat {
+    Ebook,
+    Audiobook,
+    Both,
+}
+
+impl BookFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ebook => "ebook",
+            Self::Audiobook => "audiobook",
+            Self::Both => "both",
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
@@ -59,8 +78,11 @@ pub enum BackendConfig {
         /// Present the "4K" quality option to users. Defaults to false.
         allow_4k: Option<bool>,
         /// Restrict search results to a single media kind.
-        /// When absent, both movies and TV shows are returned.
+        /// When absent, movies and TV shows are returned.
         media_filter: Option<MediaKind>,
+        /// Preselect a book request format. When absent, book requests prompt
+        /// for ebook, audiobook, or both.
+        book_format: Option<BookFormat>,
         /// Offer an "All Seasons" option in the season picker (default: true)
         allow_all_seasons: Option<bool>,
     },
@@ -84,6 +106,8 @@ discord_token = "your_discord_bot_token"
 # [backends.config.Seerr]
 # url = "http://localhost:5055"
 # api_key = "${SEERR_API_KEY}"
+# media_filter = "book"
+# book_format = "audiobook"
 
 # --- Sonarr ---
 # [[backends]]
@@ -383,6 +407,7 @@ mod tests {
                     fallback_user_id: Some(1),
                     allow_4k: None,
                     media_filter: None,
+                    book_format: None,
                     allow_all_seasons: None,
                 },
             }],
@@ -391,6 +416,34 @@ mod tests {
         };
 
         assert_eq!(config, expected);
+    }
+
+    #[test]
+    fn test_parse_seerr_book_config() {
+        let config: Config = toml::from_str(
+            r#"
+           discord_token = "abc123"
+
+           [[backends]]
+           media = "audiobook"
+
+           [backends.config.Seerr]
+           url = "http://1.2.3.4:5055"
+           api_key = "abc123"
+           media_filter = "book"
+           book_format = "audiobook"
+        "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            config.backends[0].config,
+            BackendConfig::Seerr {
+                media_filter: Some(MediaKind::Book),
+                book_format: Some(BookFormat::Audiobook),
+                ..
+            }
+        ));
     }
 
     #[test]

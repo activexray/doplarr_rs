@@ -26,6 +26,8 @@ In most cases, you can just remove the offending endpoints if they are unused.
 
 #### Hand-patches to `seerr_api` (do not overwrite on regen)
 
+- `seerr_api/src/models/_search_get_200_response_results_inner.rs`: search IDs accept either numeric TMDB IDs or string provider IDs, and the model includes SeerrNG book metadata (`author`, Open Library/edition IDs, ISBN, and publication year). This allows mixed movie/TV/book search responses to deserialize. Marked with `// HAND-PATCHED:` comments.
+- `seerr_api/src/models/_request_post_request.rs`: request IDs accept numbers or strings, `MediaType` includes `book`, and the SeerrNG book request fields (`format`, `editionId`, `isbn13`, and `authorId`) are available. Marked with `// HAND-PATCHED:` comments.
 - `seerr_api/src/models/_search_get_200_response_results_inner.rs`: `title` changed from `String` to `Option<String>` (with `skip_serializing_if`) and `new()` updated to match. The spec marks it required, but TV and person results use `name` instead; without this patch any mixed `/search` response fails to deserialize. Marked with `// HAND-PATCHED:` comment.
 - `seerr_api/src/models/tv_details.rs` and `movie_details.rs`: `watch_providers` changed from `Vec<Vec<WatchProvidersInner>>` to `Vec<WatchProvidersInner>`. The spec generates a doubly-nested type but the real API returns a flat array. Marked with `// HAND-PATCHED:` comment.
 - `seerr_api/src/apis/search_api.rs`: `search_get` embeds the `query` parameter directly in the URL using `percent-encoding` instead of reqwest's `.query()`. reqwest's `.query()` uses form-encoding (spaces → `+`) but Seerr requires percent-encoding (spaces → `%20`). Marked with `// HAND-PATCHED:` comment.
@@ -45,4 +47,3 @@ In `doplarr/src/config.rs`, add the appropriate configuration settings for use i
 ### Add Initialization
 
 In `doplarr/src/main.rs`, update the `let mut backends = HashMap::new() ...` section to match the new config type, mapping to your constructor.
-

@@ -71,9 +71,9 @@ jobs:
         runs-on: ubuntu-latest
         if: >-
             (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-            (github.event_name == 'workflow_dispatch' && inputs.image_tag != '')
+            github.event_name == 'workflow_dispatch'
         env:
-            IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || 'main' }}
+            IMAGE_TAG: ${{ github.event_name == 'workflow_dispatch' && (inputs.image_tag || format('sha-{0}', github.sha)) || 'main' }}
         steps:
             - name: Checkout repository
               uses: actions/checkout@v6

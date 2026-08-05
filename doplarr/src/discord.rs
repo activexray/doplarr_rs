@@ -44,6 +44,9 @@ pub const MAX_DROPDOWN_OPTIONS: usize = 25;
 /// Discord's maximum character length for text content in components
 const MAX_TEXT_CONTENT_LENGTH: usize = 4000;
 
+/// Discord's maximum UTF-16 length for a select option label or description.
+const MAX_SELECT_OPTION_TEXT_LENGTH: usize = 100;
+
 const ACCENT_COLOR: u32 = 0xCE4A28;
 
 fn escape_markdown(s: &str) -> String {
@@ -66,6 +69,28 @@ fn truncate_text(text: &str) -> String {
         end -= 1;
     }
     format!("{}...", &text[..end])
+}
+
+/// Truncate text to a Discord field limit, measured the same way Discord's API
+/// measures JavaScript strings. The ellipsis makes truncation visible while the
+/// select option's index remains its stable, unique value.
+fn truncate_select_option_text(text: &str) -> String {
+    if text.encode_utf16().count() <= MAX_SELECT_OPTION_TEXT_LENGTH {
+        return text.to_string();
+    }
+
+    let mut result = String::new();
+    let mut utf16_len = 0;
+    for ch in text.chars() {
+        let char_len = ch.len_utf16();
+        if utf16_len + char_len >= MAX_SELECT_OPTION_TEXT_LENGTH {
+            break;
+        }
+        result.push(ch);
+        utf16_len += char_len;
+    }
+    result.push('…');
+    result
 }
 
 /// Build the comand object, used to register with Discord what slash commands are available
@@ -199,10 +224,17 @@ fn dropdown_options_to_select_menu<T: AsRef<str>>(
     }
 
     for (i, option) in options.into_iter().enumerate() {
-        let mut menu_option = SelectMenuOptionBuilder::new(option.title, i.to_string())
+        let label = if option.title.trim().is_empty() {
+            "Untitled".to_string()
+        } else {
+            truncate_select_option_text(&option.title)
+        };
+        let mut menu_option = SelectMenuOptionBuilder::new(label, i.to_string())
             .default(selected_indices.contains(&i));
-        if let Some(x) = option.description {
-            menu_option = menu_option.description(x);
+        if let Some(x) = option.description
+            && !x.trim().is_empty()
+        {
+            menu_option = menu_option.description(truncate_select_option_text(&x));
         }
         menu = menu.option(menu_option);
     }
@@ -851,4 +883,30 @@ pub async fn run_interaction(
 
     info!("Interaction flow completed successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_option_text_is_limited_to_one_hundred_utf16_units() {
+        let truncated = truncate_select_option_text(&"a".repeat(101));
+        assert_eq!(truncated.encode_utf16().count(), 100);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn select_option_text_respects_surrogate_pairs() {
+        let input = format!("{}x", "📚".repeat(50));
+        let truncated = truncate_select_option_text(&input);
+        assert!(truncated.encode_utf16().count() <= 100);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn select_option_text_keeps_valid_text_unchanged() {
+        let input = "Ego Is the Enemy — Ryan Holiday";
+        assert_eq!(truncate_select_option_text(input), input);
+    }
 }

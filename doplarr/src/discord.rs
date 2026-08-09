@@ -175,6 +175,32 @@ pub async fn send_thinking(
     Ok(())
 }
 
+/// Acknowledges a component interaction without touching the message
+///
+/// Discord shows any component interaction left unanswered for three seconds as
+/// failed, so this buys time for work that has to happen before we can render a
+/// reply. The message itself is updated afterwards through the original
+/// interaction's token, which stays valid far longer.
+async fn ack_component_interaction(
+    client: &Arc<HttpClient>,
+    application_id: Id<ApplicationMarker>,
+    interaction_id: Id<InteractionMarker>,
+    interaction_token: &str,
+) -> anyhow::Result<()> {
+    client
+        .interaction(application_id)
+        .create_response(
+            interaction_id,
+            interaction_token,
+            &InteractionResponse {
+                kind: InteractionResponseType::DeferredUpdateMessage,
+                data: None,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 /// Convert a vector of [DropdownOption] into a discord Select Menu, keyed by the vec index.
 /// `selected_indices` marks those options as default so Discord preserves the selection on re-render.
 /// When `max_values` is `Some(n)`, the menu allows selecting 1–n items (multi-select).
@@ -612,7 +638,19 @@ pub async fn run_interaction(
     // Now check the early stop critera
     if backend.early_stop(&*selection) {
         info!("Stopping early - media already requested");
-        update_string_message(EARLY_STOP_MESSAGE, &discord_http, application_id, &token).await?;
+
+        // Acknowledge the dropdown before asking the backend what the current
+        // status is - that lookup can outlast Discord's three second window
+        ack_component_interaction(
+            &discord_http,
+            application_id,
+            next.interaction_id,
+            &next.token,
+        )
+        .await?;
+
+        let message = backend.early_stop_message(&*selection).await;
+        update_string_message(&message, &discord_http, application_id, &token).await?;
         return Ok(());
     }
     debug!("Selection has not been requested, continuing interaction");

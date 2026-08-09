@@ -5,6 +5,7 @@
 //! 2. Determines if a selected search result is already available or has been requested before
 //! 3. Provides a set of additional information needed to complete the request (quality profile, season, etc)
 //! 4. Perform the request using the payload and the set of additional information and respond with a success or failure
+use crate::discord::EARLY_STOP_MESSAGE;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::{any::Any, fmt::Debug};
@@ -180,6 +181,16 @@ pub trait MediaBackend: Send + Sync {
     /// Given a search results payload, determine if we should stop the interaction flow early
     /// Not all providers will be able to do this with the payload alone, but this needs to not require a backend request
     fn early_stop(&self, media: &dyn MediaItem) -> bool;
+
+    /// The message shown to the user when [`MediaBackend::early_stop`] ends the flow
+    ///
+    /// This runs only once that decision has been made, so - unlike `early_stop`
+    /// itself - a backend may query for the media's current status and report
+    /// something more useful than "already requested". A backend that can't, or
+    /// whose lookup fails, falls back to the generic message.
+    async fn early_stop_message(&self, _media: &dyn MediaItem) -> String {
+        EARLY_STOP_MESSAGE.to_string()
+    }
 
     /// Return the media display info
     fn display_info(&self, media: &dyn MediaItem) -> MediaDisplayInfo;

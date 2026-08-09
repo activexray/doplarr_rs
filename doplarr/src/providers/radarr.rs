@@ -1,19 +1,21 @@
 use super::*;
-use crate::config::BackendConfig;
+use crate::{config::BackendConfig, discord::EARLY_STOP_MESSAGE};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use radarr_api::{
     apis::{
         Error as RadarrApiError,
         configuration::{ApiKey, Configuration},
-        movie_api::api_v3_movie_post,
+        movie_api::{api_v3_movie_id_get, api_v3_movie_post},
         movie_lookup_api::api_v3_movie_lookup_get,
         quality_profile_api::api_v3_qualityprofile_get,
+        queue_details_api::api_v3_queue_details_get,
         root_folder_api::api_v3_rootfolder_get,
     },
     models::{
         AddMovieOptions, MonitorTypes, MovieResource, MovieStatusType, QualityProfileResource,
-        RootFolderResource,
+        QueueResource, QueueStatus, RootFolderResource, TrackedDownloadState,
+        TrackedDownloadStatus,
     },
 };
 use tracing::{debug, error, info, trace, warn};
@@ -406,6 +408,174 @@ impl TryFrom<Vec<RequestDetails>> for SelectedDetails {
     }
 }
 
+/// Describes what Radarr is currently doing about a movie it already has
+///
+/// Ordered from most to least specific: a file on disk settles the matter no
+/// matter what else is going on, an active download is the next most useful
+/// thing to report, and the remaining cases explain why nothing is happening yet.
+fn describe_status(movie: &MovieResource, queue: &[QueueResource]) -> String {
+    if movie.has_file.flatten().unwrap_or(false) {
+        return match file_quality(movie) {
+            Some(quality) => format!("Already available ({quality})"),
+            None => "Already available".to_string(),
+        };
+    }
+
+    if let Some(item) = pick_queue_item(queue) {
+        return describe_queue_item(item);
+    }
+
+    // Nothing on disk and nothing downloading - the movie is only in the
+    // library because someone added it, so say what it's waiting on
+    if !movie.monitored.unwrap_or(false) {
+        return "Already in Radarr, but not monitored - nothing will be downloaded".to_string();
+    }
+
+    // `is_available` is Radarr's own verdict on whether the movie has passed the
+    // minimum availability it was added with. Assume it has when absent, since
+    // "searching" is the less alarming thing to be wrong about
+    if movie.is_available.unwrap_or(true) {
+        "Waiting to be available - Radarr is searching for a release".to_string()
+    } else {
+        match expected_release(movie) {
+            Some(date) => {
+                format!("Waiting to be available - not released yet (expected {date})")
+            }
+            None => "Waiting to be available - not released yet".to_string(),
+        }
+    }
+}
+
+/// The quality name of the movie file currently on disk, e.g. "Bluray-1080p"
+fn file_quality(movie: &MovieResource) -> Option<String> {
+    movie
+        .movie_file
+        .as_ref()?
+        .quality
+        .as_ref()?
+        .quality
+        .as_ref()?
+        .name
+        .clone()
+        .flatten()
+}
+
+/// Picks the queue record worth reporting on
+///
+/// Radarr keeps one record per grab, so a movie whose first release stalled can
+/// have several. A record that needs attention is the one the user wants to hear
+/// about; otherwise any of them describes the download equally well.
+fn pick_queue_item(queue: &[QueueResource]) -> Option<&QueueResource> {
+    queue
+        .iter()
+        .find(|item| needs_attention(item))
+        .or_else(|| queue.first())
+}
+
+fn needs_attention(item: &QueueResource) -> bool {
+    matches!(
+        item.status,
+        Some(QueueStatus::Warning | QueueStatus::Failed | QueueStatus::DownloadClientUnavailable)
+    ) || matches!(
+        item.tracked_download_status,
+        Some(TrackedDownloadStatus::Warning | TrackedDownloadStatus::Error)
+    )
+}
+
+fn describe_queue_item(item: &QueueResource) -> String {
+    // Radarr explains its warnings and failures here, and the explanation is
+    // usually the actionable half of the message ("stalled with no connections")
+    let detail = item
+        .error_message
+        .as_ref()
+        .and_then(|message| message.as_deref())
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    let with_detail = |headline: String| match detail {
+        Some(detail) => format!("{headline} - {detail}"),
+        None => headline,
+    };
+
+    // The import states describe a download that has already finished, so they
+    // take precedence over whatever the transfer status still says
+    match item.tracked_download_state {
+        Some(TrackedDownloadState::Importing | TrackedDownloadState::ImportPending) => {
+            return with_detail("Downloaded - importing now".to_string());
+        }
+        Some(TrackedDownloadState::ImportBlocked) => {
+            return with_detail("Downloaded, but the import is blocked".to_string());
+        }
+        Some(TrackedDownloadState::Failed | TrackedDownloadState::FailedPending) => {
+            return with_detail("Download failed".to_string());
+        }
+        _ => {}
+    }
+
+    if needs_attention(item) {
+        return with_detail(format!("Download stalled{}", progress_suffix(item)));
+    }
+
+    match item.status {
+        Some(QueueStatus::Paused) => {
+            with_detail(format!("Download paused{}", progress_suffix(item)))
+        }
+        Some(QueueStatus::Queued) => with_detail("Queued for download".to_string()),
+        Some(QueueStatus::Delay) => with_detail("Waiting on an indexer delay".to_string()),
+        Some(QueueStatus::Completed) => {
+            with_detail("Download complete - waiting to be imported".to_string())
+        }
+        // Anything else is a transfer in flight, including the unknown status
+        // older download clients report while they're still working
+        _ => {
+            let mut message = match download_progress(item) {
+                Some(percent) => format!("Downloading - {percent}%"),
+                None => "Downloading".to_string(),
+            };
+            if let Some(timeleft) = item
+                .timeleft
+                .as_ref()
+                .and_then(|timeleft| timeleft.as_deref())
+                .filter(|timeleft| !timeleft.is_empty())
+            {
+                message.push_str(&format!(", {timeleft} remaining"));
+            }
+            with_detail(message)
+        }
+    }
+}
+
+/// " at 47%", or nothing when the download client hasn't reported sizes
+fn progress_suffix(item: &QueueResource) -> String {
+    match download_progress(item) {
+        Some(percent) => format!(" at {percent}%"),
+        None => String::new(),
+    }
+}
+
+/// Percentage of the download that has completed
+fn download_progress(item: &QueueResource) -> Option<u32> {
+    let size = item.size?;
+    let sizeleft = item.sizeleft?;
+    if size <= 0.0 {
+        return None;
+    }
+    Some(((size - sizeleft) / size * 100.0).clamp(0.0, 100.0).round() as u32)
+}
+
+/// The date the movie is expected to become available, as a plain `YYYY-MM-DD`
+///
+/// Radarr sends full timestamps; the time of day is noise for this message.
+fn expected_release(movie: &MovieResource) -> Option<String> {
+    [
+        &movie.digital_release,
+        &movie.physical_release,
+        &movie.in_cinemas,
+    ]
+    .into_iter()
+    .filter_map(|date| date.as_ref().and_then(|date| date.as_deref()))
+    .find_map(|date| date.get(..10).map(str::to_string))
+}
+
 impl MediaItem for MovieResource {
     fn to_dropdown(&self) -> DropdownOption {
         DropdownOption {
@@ -444,8 +614,61 @@ impl MediaBackend for Radarr {
         media
             .as_any()
             .downcast_ref::<MovieResource>()
-            .map(|m| m.id.is_some())
+            .map(|m| m.id.is_some_and(|id| id > 0))
             .unwrap_or(false)
+    }
+
+    async fn early_stop_message(&self, media: &dyn MediaItem) -> String {
+        let Some(media) = media.as_any().downcast_ref::<MovieResource>() else {
+            error!("early_stop_message called with wrong media type for Radarr backend");
+            return EARLY_STOP_MESSAGE.to_string();
+        };
+
+        // Guaranteed by `early_stop`, which is the only thing that gets us here
+        let Some(id) = media.id.filter(|id| *id > 0) else {
+            return EARLY_STOP_MESSAGE.to_string();
+        };
+
+        info!(
+            movie_id = id,
+            "Movie already in Radarr, checking its status"
+        );
+
+        // The lookup payload is metadata with a library id stapled on, so re-read
+        // the library record for the fields that describe progress, alongside the
+        // queue for anything currently downloading. Telling "searching for a
+        // release" apart from "downloading" needs both, so if either call fails we
+        // fall back to the generic message rather than report the wrong state.
+        let (movie, queue) = tokio::join!(
+            api_v3_movie_id_get(&self.config, id),
+            api_v3_queue_details_get(&self.config, Some(id), Some(false)),
+        );
+
+        let movie = match movie {
+            Ok(movie) => movie,
+            Err(e) => {
+                log_api_error(&e, "Failed to get movie status from Radarr");
+                return EARLY_STOP_MESSAGE.to_string();
+            }
+        };
+
+        let queue = match queue {
+            Ok(queue) => queue,
+            Err(e) => {
+                log_api_error(&e, "Failed to get queue status from Radarr");
+                return EARLY_STOP_MESSAGE.to_string();
+            }
+        };
+
+        trace!(movie = ?movie, queue = ?queue, "Status sources");
+        let status = describe_status(&movie, &queue);
+        debug!(
+            movie_id = id,
+            queued = queue.len(),
+            status = %status,
+            "Resolved movie status"
+        );
+        status
     }
 
     fn display_info(&self, media: &dyn MediaItem) -> MediaDisplayInfo {
@@ -569,6 +792,7 @@ impl MediaBackend for Radarr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radarr_api::models::{MovieFileResource, Quality, QualityModel};
 
     /// Build a single-select detail with one option, optionally pre-selected.
     fn detail(metadata: &str, title: &str, id: SelectableId, selected: bool) -> RequestDetails {
@@ -646,5 +870,188 @@ mod tests {
         });
         details[1].selected_indices = vec![];
         assert!(SelectedDetails::try_from(details).is_err());
+    }
+
+    /// A movie in the library that nothing has downloaded yet.
+    fn library_movie() -> MovieResource {
+        MovieResource {
+            id: Some(42),
+            monitored: Some(true),
+            has_file: Some(Some(false)),
+            is_available: Some(true),
+            ..MovieResource::new()
+        }
+    }
+
+    /// A queue record for a download that is halfway through.
+    fn queue_item() -> QueueResource {
+        QueueResource {
+            movie_id: Some(Some(42)),
+            size: Some(1000.0),
+            sizeleft: Some(530.0),
+            status: Some(QueueStatus::Downloading),
+            tracked_download_status: Some(TrackedDownloadStatus::Ok),
+            tracked_download_state: Some(TrackedDownloadState::Downloading),
+            ..QueueResource::new()
+        }
+    }
+
+    fn movie_file(quality: &str) -> Box<MovieFileResource> {
+        Box::new(MovieFileResource {
+            quality: Some(Box::new(QualityModel {
+                quality: Some(Box::new(Quality {
+                    name: Some(Some(quality.to_string())),
+                    ..Quality::new()
+                })),
+                ..QualityModel::new()
+            })),
+            ..MovieFileResource::new()
+        })
+    }
+
+    #[test]
+    fn status_reports_a_movie_on_disk_as_available() {
+        let movie = MovieResource {
+            has_file: Some(Some(true)),
+            movie_file: Some(movie_file("Bluray-1080p")),
+            ..library_movie()
+        };
+        assert_eq!(
+            describe_status(&movie, &[]),
+            "Already available (Bluray-1080p)"
+        );
+    }
+
+    #[test]
+    fn status_prefers_the_file_over_a_leftover_queue_record() {
+        // An import that hasn't been cleared from the queue yet must not read as
+        // "still downloading" once the file is on disk.
+        let movie = MovieResource {
+            has_file: Some(Some(true)),
+            ..library_movie()
+        };
+        assert_eq!(
+            describe_status(&movie, &[queue_item()]),
+            "Already available"
+        );
+    }
+
+    #[test]
+    fn status_reports_download_progress() {
+        let item = QueueResource {
+            timeleft: Some(Some("00:12:34".to_string())),
+            ..queue_item()
+        };
+        assert_eq!(
+            describe_status(&library_movie(), &[item]),
+            "Downloading - 47%, 00:12:34 remaining"
+        );
+    }
+
+    #[test]
+    fn status_reports_download_progress_without_an_estimate() {
+        assert_eq!(
+            describe_status(&library_movie(), &[queue_item()]),
+            "Downloading - 47%"
+        );
+    }
+
+    #[test]
+    fn status_reports_a_stalled_download_with_radarrs_explanation() {
+        let item = QueueResource {
+            status: Some(QueueStatus::Warning),
+            tracked_download_status: Some(TrackedDownloadStatus::Warning),
+            error_message: Some(Some(
+                "The download is stalled with no connections".to_string(),
+            )),
+            ..queue_item()
+        };
+        assert_eq!(
+            describe_status(&library_movie(), &[item]),
+            "Download stalled at 47% - The download is stalled with no connections"
+        );
+    }
+
+    #[test]
+    fn status_picks_the_queue_record_that_needs_attention() {
+        // Radarr keeps a record per grab, so a healthy retry can sit alongside
+        // the stalled release the user actually needs to hear about.
+        let stalled = QueueResource {
+            status: Some(QueueStatus::Warning),
+            sizeleft: Some(1000.0),
+            ..queue_item()
+        };
+        assert_eq!(
+            describe_status(&library_movie(), &[queue_item(), stalled]),
+            "Download stalled at 0%"
+        );
+    }
+
+    #[test]
+    fn status_reports_an_import_in_progress() {
+        let item = QueueResource {
+            status: Some(QueueStatus::Completed),
+            tracked_download_state: Some(TrackedDownloadState::Importing),
+            ..queue_item()
+        };
+        assert_eq!(
+            describe_status(&library_movie(), &[item]),
+            "Downloaded - importing now"
+        );
+    }
+
+    #[test]
+    fn status_reports_a_queued_download() {
+        let item = QueueResource {
+            status: Some(QueueStatus::Queued),
+            sizeleft: Some(1000.0),
+            ..queue_item()
+        };
+        assert_eq!(
+            describe_status(&library_movie(), &[item]),
+            "Queued for download"
+        );
+    }
+
+    #[test]
+    fn status_reports_a_monitored_movie_with_nothing_in_the_queue() {
+        assert_eq!(
+            describe_status(&library_movie(), &[]),
+            "Waiting to be available - Radarr is searching for a release"
+        );
+    }
+
+    #[test]
+    fn status_reports_an_unreleased_movie_with_its_expected_date() {
+        let movie = MovieResource {
+            is_available: Some(false),
+            digital_release: Some(Some("2026-09-01T00:00:00Z".to_string())),
+            ..library_movie()
+        };
+        assert_eq!(
+            describe_status(&movie, &[]),
+            "Waiting to be available - not released yet (expected 2026-09-01)"
+        );
+    }
+
+    #[test]
+    fn status_reports_an_unmonitored_movie() {
+        let movie = MovieResource {
+            monitored: Some(false),
+            ..library_movie()
+        };
+        assert_eq!(
+            describe_status(&movie, &[]),
+            "Already in Radarr, but not monitored - nothing will be downloaded"
+        );
+    }
+
+    #[test]
+    fn download_progress_ignores_a_client_that_reports_no_size() {
+        let item = QueueResource {
+            size: Some(0.0),
+            ..queue_item()
+        };
+        assert_eq!(describe_status(&library_movie(), &[item]), "Downloading");
     }
 }

@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 pub struct MediaRequestModifiedBy {
     #[serde(rename = "id")]
     pub id: i32,
-    #[serde(rename = "email")]
-    pub email: String,
+    // HAND-PATCHED: SeerrNG omits email from user summaries embedded in book
+    // request and search responses.
+    #[serde(rename = "email", skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     #[serde(rename = "username", skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(rename = "plexUsername", skip_serializing_if = "Option::is_none")]
@@ -48,7 +50,7 @@ impl MediaRequestModifiedBy {
     ) -> MediaRequestModifiedBy {
         MediaRequestModifiedBy {
             id,
-            email,
+            email: Some(email),
             username: None,
             plex_username: None,
             plex_token: None,

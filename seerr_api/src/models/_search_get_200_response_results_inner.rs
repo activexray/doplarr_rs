@@ -11,10 +11,41 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
+// HAND-PATCHED: SeerrNG search results use numeric TMDB IDs for movies/TV and
+// string provider IDs (for example Open Library work IDs) for books and music.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SearchResultId {
+    Number(f64),
+    String(String),
+}
+
+impl Default for SearchResultId {
+    fn default() -> Self {
+        Self::Number(0.0)
+    }
+}
+
+impl SearchResultId {
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Self::Number(id) => Some(*id),
+            Self::String(_) => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Number(_) => None,
+            Self::String(id) => Some(id),
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchGet200ResponseResultsInner {
     #[serde(rename = "id")]
-    pub id: f64,
+    pub id: SearchResultId,
     #[serde(rename = "mediaType")]
     pub media_type: String,
     #[serde(rename = "popularity", skip_serializing_if = "Option::is_none")]
@@ -59,10 +90,20 @@ pub struct SearchGet200ResponseResultsInner {
     pub profile_path: Option<String>,
     #[serde(rename = "knownFor", skip_serializing_if = "Option::is_none")]
     pub known_for: Option<Vec<models::PersonResultKnownForInner>>,
+    #[serde(rename = "author", skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(rename = "authorId", skip_serializing_if = "Option::is_none")]
+    pub author_id: Option<String>,
+    #[serde(rename = "firstPublishYear", skip_serializing_if = "Option::is_none")]
+    pub first_publish_year: Option<f64>,
+    #[serde(rename = "isbn13", skip_serializing_if = "Option::is_none")]
+    pub isbn13: Option<String>,
+    #[serde(rename = "editionId", skip_serializing_if = "Option::is_none")]
+    pub edition_id: Option<String>,
 }
 
 impl SearchGet200ResponseResultsInner {
-    pub fn new(id: f64, media_type: String) -> SearchGet200ResponseResultsInner {
+    pub fn new(id: SearchResultId, media_type: String) -> SearchGet200ResponseResultsInner {
         SearchGet200ResponseResultsInner {
             id,
             media_type,
@@ -86,6 +127,104 @@ impl SearchGet200ResponseResultsInner {
             first_air_date: None,
             profile_path: None,
             known_for: None,
+            author: None,
+            author_id: None,
+            first_publish_year: None,
+            isbn13: None,
+            edition_id: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchResultId;
+    use crate::models::{MediaRequest, SearchGet200Response};
+
+    fn request_without_user_emails() -> serde_json::Value {
+        serde_json::json!({
+            "id": 42,
+            "status": 2,
+            "requestedBy": {
+                "id": 1,
+                "username": "reader",
+                "createdAt": "2026-08-05T00:00:00.000Z",
+                "updatedAt": "2026-08-05T00:00:00.000Z"
+            },
+            "modifiedBy": {
+                "id": 1,
+                "username": "reader",
+                "createdAt": "2026-08-05T00:00:00.000Z",
+                "updatedAt": "2026-08-05T00:00:00.000Z"
+            }
+        })
+    }
+
+    #[test]
+    fn mixed_search_supports_numeric_and_provider_ids() {
+        let response: SearchGet200Response = serde_json::from_value(serde_json::json!({
+            "results": [
+                { "id": 603, "mediaType": "movie", "title": "The Matrix" },
+                { "id": 1396, "mediaType": "tv", "name": "Breaking Bad" },
+                {
+                    "id": "OL45804W",
+                    "mediaType": "book",
+                    "title": "The Left Hand of Darkness",
+                    "author": "Ursula K. Le Guin",
+                    "authorId": "OL21879A",
+                    "firstPublishYear": 1969,
+                    "isbn13": "9780441478125",
+                    "editionId": "OL1M"
+                }
+            ]
+        }))
+        .expect("mixed SeerrNG response should deserialize");
+
+        let results = response.results.expect("results should be present");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].id, SearchResultId::Number(603.0));
+        assert_eq!(results[2].id, SearchResultId::String("OL45804W".into()));
+        assert_eq!(results[2].author.as_deref(), Some("Ursula K. Le Guin"));
+        assert_eq!(results[2].isbn13.as_deref(), Some("9780441478125"));
+    }
+
+    #[test]
+    fn seerrng_request_users_may_omit_email() {
+        let request: MediaRequest = serde_json::from_value(request_without_user_emails())
+            .expect("SeerrNG book request response should deserialize without user emails");
+        assert!(request.requested_by.unwrap().email.is_none());
+        assert!(request.modified_by.unwrap().email.is_none());
+
+        let response: SearchGet200Response = serde_json::from_value(serde_json::json!({
+            "results": [{
+                "id": "OL123W",
+                "mediaType": "book",
+                "title": "Scale",
+                "mediaInfo": {
+                    "id": 7,
+                    "status": 2,
+                    "requests": [request_without_user_emails()],
+                    "createdAt": "2026-08-05T00:00:00.000Z",
+                    "updatedAt": "2026-08-05T00:00:00.000Z"
+                }
+            }]
+        }))
+        .expect("SeerrNG search response should deserialize without user emails");
+
+        let results = response.results.unwrap();
+        let nested_request = &results[0]
+            .media_info
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()[0];
+        assert!(nested_request
+            .requested_by
+            .as_ref()
+            .unwrap()
+            .email
+            .is_none());
+        assert!(nested_request.modified_by.as_ref().unwrap().email.is_none());
     }
 }

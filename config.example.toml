@@ -46,6 +46,7 @@ public_followup = true
 # - /request movie_4k  -> 4K movies (same or different Radarr)
 # - /request series    -> TV shows
 # - /request anime     -> Anime (separate Sonarr or same with different settings)
+# - /request book      -> Books through a book-capable SeerrNG instance
 
 # ------------------------------------------------------------------------------
 # RADARR BACKEND (Movies)
@@ -174,7 +175,7 @@ api_key = "your_sonarr_api_key"
 # # Sends Seerr's "all" sentinel; future-season behavior follows your Sonarr setup.
 # # allow_all_seasons = false
 #
-# # Optional: restrict search results to a single media kind ("movie" or "tv").
+# # Optional: restrict search results to a single media kind ("movie", "tv", or "book").
 # # When absent, both movies and TV shows are returned.
 # # Useful when configuring separate /request movie and /request series commands:
 #
@@ -193,3 +194,17 @@ api_key = "your_sonarr_api_key"
 # url = "http://localhost:5055"
 # api_key = "your_seerr_admin_api_key"
 # media_filter = "tv"
+
+# A book-capable SeerrNG instance can expose BookshelfNG requests as a separate
+# Discord command. If book_format is omitted, users choose ebook, audiobook, or
+# both when requesting. Set it to one of those values to preselect the format.
+#
+# [[backends]]
+# media = "book"
+#
+# [backends.config.Seerr]
+# url = "http://localhost:5055"
+# api_key = "your_seerr_admin_api_key"
+# fallback_user_id = 1
+# media_filter = "book"
+# book_format = "audiobook"

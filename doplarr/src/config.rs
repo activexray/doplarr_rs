@@ -64,6 +64,13 @@ pub enum BackendConfig {
         /// Offer an "All Seasons" option in the season picker (default: true)
         allow_all_seasons: Option<bool>,
     },
+    Sportarr {
+        url: String,
+        api_key: String,
+        /// Pin every request to this quality profile by name; when absent, the
+        /// requester picks from a dropdown
+        quality_profile: Option<String>,
+    },
 }
 
 /// Starter config written when no config file exists and no migration
@@ -100,6 +107,14 @@ discord_token = "your_discord_bot_token"
 # [backends.config.Radarr]
 # url = "http://localhost:7878"
 # api_key = "${RADARR_API_KEY}"
+
+# --- Sportarr ---
+# [[backends]]
+# media = "sport"
+#
+# [backends.config.Sportarr]
+# url = "http://localhost:1867"
+# api_key = "${SPORTARR_API_KEY}"
 "#;
 
 /// Expand `${VAR}` references against the process environment. Expansion

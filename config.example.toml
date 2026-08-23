@@ -193,3 +193,27 @@ api_key = "your_sonarr_api_key"
 # url = "http://localhost:5055"
 # api_key = "your_seerr_admin_api_key"
 # media_filter = "tv"
+
+# ------------------------------------------------------------------------------
+# SPORTARR BACKEND (Sports leagues)
+# ------------------------------------------------------------------------------
+# Adds a /request sport command: users search the Sportarr league catalog
+# and requested leagues are added monitored, so new events get grabbed as
+# they air.
+
+# [[backends]]
+# media = "sport"
+#
+# [backends.config.Sportarr]
+# url = "http://localhost:1867"
+# api_key = "your_sportarr_api_key"
+
+# All settings below are OPTIONAL
+# If omitted, users will select them at runtime via Discord UI
+
+# Quality profile name (must match exactly what's in Sportarr)
+# quality_profile = "WEB-1080p"
+
+# Note: root folder and monitoring scope follow Sportarr's own defaults
+# (per-root-folder default profiles and the league's Future monitor type),
+# so those are never asked in Discord.

@@ -379,6 +379,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sonarr_api",
+ "sportarr_api",
  "tokio",
  "toml",
  "tracing",
@@ -1819,6 +1820,16 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "serde_with",
+ "url",
+]
+
+[[package]]
+name = "sportarr_api"
+version = "1.0.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
  "url",
 ]
 

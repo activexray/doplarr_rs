@@ -28,6 +28,7 @@ mod api_logging;
 pub mod radarr;
 pub mod seerr;
 pub mod sonarr;
+pub mod sportarr;
 
 /// Sentinel id for an "All Seasons" entry in a season multi-select. Real season
 /// numbers are >= 0, so -1 never collides. The Discord layer treats an option

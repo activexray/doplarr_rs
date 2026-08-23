@@ -20,6 +20,7 @@ async-trait = "0.1"
 # Backend APIs
 radarr_api = { path = "../radarr_api" }
 sonarr_api = { path = "../sonarr_api" }
+sportarr_api = { path = "../sportarr_api" }
 seerr_api = { path = "../seerr_api" }
 
 # Discord libraries

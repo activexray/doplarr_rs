@@ -4,6 +4,7 @@ use config::{Backend, BackendConfig};
 use discord::InteractionContinue;
 use providers::{
     MediaBackend, UserFacingError, radarr::Radarr, seerr::Seerr as SeerrBackend, sonarr::Sonarr,
+    sportarr::Sportarr,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -113,6 +114,9 @@ async fn main() -> anyhow::Result<()> {
             }
             BackendConfig::Seerr { .. } => {
                 Arc::new(SeerrBackend::connect(config.clone(), backend_http.clone()).await?)
+            }
+            BackendConfig::Sportarr { .. } => {
+                Arc::new(Sportarr::connect(config.clone(), backend_http.clone()).await?)
             }
         };
         backends.insert(media.as_str(), backend);

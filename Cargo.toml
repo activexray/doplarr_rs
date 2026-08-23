@@ -1,5 +1,5 @@
 [workspace]
-members = ["doplarr", "radarr_api", "sonarr_api", "seerr_api"]
+members = ["doplarr", "radarr_api", "sonarr_api", "seerr_api", "sportarr_api"]
 resolver = "3"
 
 [workspace.package]

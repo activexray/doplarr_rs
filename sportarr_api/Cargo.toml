@@ -1,0 +1,20 @@
+[package]
+name = "sportarr_api"
+version = "1.0.0"
+description = "Minimal hand-written client for the Sportarr API (league search, add, profiles, root folders)"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+percent-encoding = "2"
+reqwest = { version = "^0.13", default-features = false, features = [
+  "json",
+  "query",
+] }
+
+[features]
+default = ["rustls-tls"]
+native-tls = ["reqwest/native-tls"]
+rustls-tls = ["reqwest/rustls"]

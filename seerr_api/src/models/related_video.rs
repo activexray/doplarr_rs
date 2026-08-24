@@ -68,8 +68,9 @@ impl Default for Type {
 pub enum Site {
     #[serde(rename = "YouTube")]
     YouTube,
+    #[serde(other)]
+    Unknown,
 }
-
 impl Default for Site {
     fn default() -> Site {
         Self::YouTube

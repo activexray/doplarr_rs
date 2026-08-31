@@ -57,7 +57,7 @@ fn user_facing_error(err: &anyhow::Error) -> String {
 
 type InteractionMap = Arc<Mutex<HashMap<uuid::Uuid, (mpsc::Sender<InteractionContinue>, Instant)>>>;
 
-/// Collect every backend command (across al backends), erroring if any name is claimed by more than one backend.
+/// Collect every backend command (across all backends), erroring if any name is claimed by more than one backend.
 fn distinct_media_types(backends: &[Backend]) -> anyhow::Result<HashSet<&str>> {
     let mut media_types = HashSet::new();
     if !backends

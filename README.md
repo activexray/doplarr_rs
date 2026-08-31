@@ -160,7 +160,7 @@ cargo build --release
 **Config parse errors**
 - Validate your TOML syntax (e.g. [jsonformatter.org/toml-validator](https://jsonformatter.org/toml-validator))
 - `discord_token` and at least one `[[backends]]` entry are required
-- Each backend's `media` value must be unique
+- Every `media` command name must be unique, even across a backend's own aliases
 
 ## Migrating from the Clojure version
 

@@ -14,8 +14,25 @@ pub struct Config {
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
 pub struct Backend {
-    pub media: String,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub media: Vec<String>,
     pub config: BackendConfig,
+}
+
+/// Deserialize String/Vec<String> to Vec<String>.
+fn string_or_vec<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq, Eq, Clone)]
@@ -354,7 +371,7 @@ mod tests {
         let expected = Config {
             discord_token: "abc123".to_string(),
             backends: vec![Backend {
-                media: "movie".to_string(),
+                media: vec!["movie".to_string()],
                 config: BackendConfig::Radarr {
                     url: "http://1.2.3.4:7878".to_string(),
                     api_key: "abc123".to_string(),
@@ -369,6 +386,25 @@ mod tests {
         };
 
         assert_eq!(config, expected);
+    }
+
+    #[test]
+    fn backend_media_accepts_array_of_commands() {
+        let config: Config = toml::from_str(
+            r#"
+           discord_token = "abc123"
+
+           [[backends]]
+           media = ["movie", "film"]
+
+           [backends.config.Radarr]
+           url = "http://1.2.3.4:7878"
+           api_key = "abc123"
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.backends[0].media, vec!["movie", "film"]);
     }
 
     #[test]
@@ -391,7 +427,7 @@ mod tests {
         let expected = Config {
             discord_token: "abc123".to_string(),
             backends: vec![Backend {
-                media: "media".to_string(),
+                media: vec!["media".to_string()],
                 config: BackendConfig::Seerr {
                     url: "http://1.2.3.4:5055".to_string(),
                     api_key: "abc123".to_string(),

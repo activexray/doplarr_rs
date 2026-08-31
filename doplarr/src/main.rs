@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{Context, bail};
 use clap::Parser;
 use config::{Backend, BackendConfig};
 use discord::InteractionContinue;
@@ -56,6 +56,11 @@ fn user_facing_error(err: &anyhow::Error) -> String {
 }
 
 type InteractionMap = Arc<Mutex<HashMap<uuid::Uuid, (mpsc::Sender<InteractionContinue>, Instant)>>>;
+
+fn log_discord_auth_error<E: std::fmt::Display>(err: E) -> E {
+    error!("Discord API error: {err}");
+    err
+}
 
 /// Collect every backend command (across all backends), erroring if any name is claimed by more than one backend.
 fn distinct_media_types(backends: &[Backend]) -> anyhow::Result<HashSet<&str>> {
@@ -138,8 +143,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Cache the application ID for repeated use later in the process.
     let application_id = {
-        let response = discord_http.current_user_application().await?;
-        response.model().await?.id
+        let response = discord_http
+            .current_user_application()
+            .await
+            .map_err(log_discord_auth_error)
+            .context("Failed to retrieve Discord application")?;
+        response
+            .model()
+            .await
+            .map_err(log_discord_auth_error)
+            .context("Failed to read Discord application response")?
+            .id
     };
 
     // Build the list of media types we'll register commands for

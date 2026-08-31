@@ -57,6 +57,19 @@ fn user_facing_error(err: &anyhow::Error) -> String {
 
 type InteractionMap = Arc<Mutex<HashMap<uuid::Uuid, (mpsc::Sender<InteractionContinue>, Instant)>>>;
 
+/// Collect every backend command (across al backends), erroring if any name is claimed by more than one backend.
+fn distinct_media_types(backends: &[Backend]) -> anyhow::Result<HashSet<&str>> {
+    let mut media_types = HashSet::new();
+    if !backends
+        .iter()
+        .flat_map(|b| &b.media)
+        .all(|m| media_types.insert(m.as_str()))
+    {
+        bail!("There must only be one of each media type");
+    }
+    Ok(media_types)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse command line args to get path to config file
@@ -69,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    // Setup logging with configured level
+    // Setup logging with configured levels
     let log_level = config.log_level.as_deref().unwrap_or("info");
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
@@ -86,15 +99,7 @@ async fn main() -> anyhow::Result<()> {
         bail!("At least one media backend is required!");
     }
 
-    // Check that all media types are unique
-    let mut media_types = HashSet::new();
-    if !config
-        .backends
-        .iter()
-        .all(|x| media_types.insert(x.media.as_str()))
-    {
-        bail!("There must only be one of each media type");
-    }
+    let media_types = distinct_media_types(&config.backends)?;
 
     // Build the HTTP request client for backend calls with a reasonable timeout
     let backend_http = reqwest::Client::builder()
@@ -119,7 +124,9 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(Sportarr::connect(config.clone(), backend_http.clone()).await?)
             }
         };
-        backends.insert(media.as_str(), backend);
+        for m in media {
+            backends.insert(m.as_str(), backend.clone());
+        }
     }
 
     // We listen for interactions, plus guild events so we can register commands
@@ -404,4 +411,51 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use config::BackendConfig;
+
+    fn backend(media: &[&str]) -> Backend {
+        Backend {
+            media: media.iter().map(|s| s.to_string()).collect(),
+            config: BackendConfig::Sportarr {
+                url: "http://localhost".to_string(),
+                api_key: "key".to_string(),
+                quality_profile: None,
+            },
+        }
+    }
+
+    #[test]
+    fn distinct_media_types_allows_unique_commands() {
+        let backends = [backend(&["movie"]), backend(&["series"])];
+        let types = distinct_media_types(&backends).unwrap();
+
+        assert_eq!(types, HashSet::from(["movie", "series"]));
+    }
+
+    #[test]
+    fn distinct_media_types_allows_alias_on_same_backend() {
+        let backends = [backend(&["movie", "film"])];
+        let types = distinct_media_types(&backends).unwrap();
+
+        assert_eq!(types, HashSet::from(["movie", "film"]));
+    }
+
+    #[test]
+    fn distinct_media_types_errors_non_unique_commands() {
+        let backends = [backend(&["movie"]), backend(&["movie"])];
+
+        assert!(distinct_media_types(&backends).is_err());
+    }
+
+    #[test]
+    fn distinct_media_types_errors_non_unique_on_same_backend() {
+        let backends = [backend(&["movie", "movie"])];
+
+        assert!(distinct_media_types(&backends).is_err());
+    }
 }

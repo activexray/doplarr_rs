@@ -21,6 +21,17 @@ impl std::fmt::Display for UserFacingError {
 
 impl std::error::Error for UserFacingError {}
 
+#[derive(Debug)]
+pub(crate) struct BackendHttpError(pub reqwest::StatusCode);
+
+impl std::fmt::Display for BackendHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Backend HTTP error: {}", self.0)
+    }
+}
+
+impl std::error::Error for BackendHttpError {}
+
 // Shared utilities
 mod api_logging;
 

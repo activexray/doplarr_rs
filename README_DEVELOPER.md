@@ -26,6 +26,8 @@ In most cases, you can just remove the offending endpoints if they are unused.
 
 #### Hand-patches to `seerr_api` (do not overwrite on regen)
 
+`seerr_api` was generated from `seerr-api.yml` at seerr-team/seerr@5f2722da30 (2026-06-08). Checked against `develop` @ 84ed3c1c0e (2026-10-20): nothing doplarr uses changed (only a new optional `ignoreQuota` on `POST /request` / `MediaRequest`), so no regen was done.
+
 - `seerr_api/src/apis/request_api.rs`: `request_post` returns `Error::ResponseError` for HTTP 202. Seerr uses 202 + `{"message": ...}` to decline a request without creating one (e.g. "No seasons available to request"). Marked with `// HAND-PATCHED:` comment.
 - `seerr_api/src/models/user.rs` and `media_request_modified_by.rs`: `email` uses `#[serde(default)]` because Seerr omits it from embedded `requestedBy` and `modifiedBy` records. Missing emails deserialize as an empty string; supplied values and the existing field and constructor types are preserved. Other required fields remain required. Covered by `seerr_api/tests/user_email.rs`.
 - `seerr_api/src/models/_search_get_200_response_results_inner.rs`: `title` changed from `String` to `Option<String>` (with `skip_serializing_if`) and `new()` updated to match. The spec marks it required, but TV and person results use `name` instead; without this patch any mixed `/search` response fails to deserialize. Marked with `// HAND-PATCHED:` comment.

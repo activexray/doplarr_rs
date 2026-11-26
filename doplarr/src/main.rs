@@ -339,7 +339,10 @@ async fn main() -> anyhow::Result<()> {
                                     // a real error worth an admin's attention.
                                     if e.downcast_ref::<UserFacingError>().is_some() {
                                         info!(uuid = %uuid, reason = %e, "Interaction ended with a user-facing message");
-                                    } else if e.downcast_ref::<InteractionNotAcknowledged>().is_some() {
+                                    } else if e
+                                        .downcast_ref::<InteractionNotAcknowledged>()
+                                        .is_some()
+                                    {
                                         // No response exists to edit, so there's nobody to tell
                                         error!(uuid = %uuid, error = ?e, "Could not acknowledge interaction");
                                         in_progress.lock().await.remove(&uuid);
@@ -669,7 +672,6 @@ mod tests {
             );
         }
     }
-
 
     fn backend(media: &[&str]) -> Backend {
         Backend {

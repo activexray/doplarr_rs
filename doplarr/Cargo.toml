@@ -24,14 +24,13 @@ sportarr_api = { path = "../sportarr_api" }
 seerr_api = { path = "../seerr_api" }
 
 # Discord libraries
-twilight-http = { version = "0.17", default-features = false, features = [
+twilight-http = { version = "0.18", default-features = false, features = [
   "rustls-platform-verifier",
 ] }
-twilight-model = "0.17"
-twilight-util = { version = "0.17", features = ["builder"] }
-twilight-gateway = { version = "0.17", default-features = false, features = [
+twilight-model = "0.18"
+twilight-util = { version = "0.18", features = ["builder"] }
+twilight-gateway = { version = "0.18", default-features = false, features = [
   "rustls-platform-verifier",
-  "twilight-http",
 ] }
-twilight-cache-inmemory = "0.17"
-twilight-validate = "0.17"
+twilight-cache-inmemory = "0.18"
+twilight-validate = "0.18"

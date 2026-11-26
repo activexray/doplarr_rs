@@ -17,15 +17,15 @@ use twilight_model::{
         component::{ActionRow, ButtonStyle, SelectMenuType, UnfurledMediaItem},
         embed::{Embed, EmbedField, EmbedThumbnail},
     },
-    http::interaction::{InteractionResponse, InteractionResponseType},
+    http::interaction::{InteractionResponse, InteractionResponseData, InteractionResponseType},
     id::{
         Id,
         marker::{ApplicationMarker, ChannelMarker, InteractionMarker, UserMarker},
     },
 };
 use twilight_util::builder::{
-    InteractionResponseDataBuilder,
     command::{CommandBuilder, StringBuilder, SubCommandBuilder},
+    interaction_response::UpdateMessageBuilder,
     message::{
         ActionRowBuilder, ButtonBuilder, ContainerBuilder, SectionBuilder, SelectMenuBuilder,
         SelectMenuOptionBuilder, SeparatorBuilder, TextDisplayBuilder, ThumbnailBuilder,
@@ -127,15 +127,10 @@ async fn respond_interaction_component(
         .create_response(
             interaction_id,
             interaction_token,
-            &InteractionResponse {
-                kind: InteractionResponseType::UpdateMessage,
-                data: Some(
-                    InteractionResponseDataBuilder::new()
-                        .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                        .components(vec![component])
-                        .build(),
-                ),
-            },
+            &UpdateMessageBuilder::new()
+                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
+                .components([component])
+                .build(),
         )
         .await?;
     Ok(())
@@ -177,11 +172,10 @@ pub async fn send_thinking(
             interaction_token,
             &InteractionResponse {
                 kind: InteractionResponseType::DeferredChannelMessageWithSource,
-                data: Some(
-                    InteractionResponseDataBuilder::new()
-                        .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                        .build(),
-                ),
+                data: Some(InteractionResponseData {
+                    flags: Some(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL),
+                    ..Default::default()
+                }),
             },
         )
         .await?;
@@ -518,6 +512,7 @@ fn build_success_embed(data: &EmbedData) -> Embed {
         color: Some(ACCENT_COLOR),
         description,
         fields,
+        flags: None,
         footer: None,
         image: None,
         kind: "rich".into(),

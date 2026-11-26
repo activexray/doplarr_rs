@@ -26,6 +26,7 @@ In most cases, you can just remove the offending endpoints if they are unused.
 
 #### Hand-patches to `seerr_api` (do not overwrite on regen)
 
+- `seerr_api/src/models/user.rs` and `media_request_modified_by.rs`: `email` uses `#[serde(default)]` because Seerr omits it from embedded `requestedBy` and `modifiedBy` records. Missing emails deserialize as an empty string; supplied values and the existing field and constructor types are preserved. Other required fields remain required. Covered by `seerr_api/tests/user_email.rs`.
 - `seerr_api/src/models/_search_get_200_response_results_inner.rs`: `title` changed from `String` to `Option<String>` (with `skip_serializing_if`) and `new()` updated to match. The spec marks it required, but TV and person results use `name` instead; without this patch any mixed `/search` response fails to deserialize. Marked with `// HAND-PATCHED:` comment.
 - `seerr_api/src/models/tv_details.rs` and `movie_details.rs`: `watch_providers` changed from `Vec<Vec<WatchProvidersInner>>` to `Vec<WatchProvidersInner>`. The spec generates a doubly-nested type but the real API returns a flat array. Marked with `// HAND-PATCHED:` comment.
 - `seerr_api/src/apis/search_api.rs`: `search_get` embeds the `query` parameter directly in the URL using `percent-encoding` instead of reqwest's `.query()`. reqwest's `.query()` uses form-encoding (spaces → `+`) but Seerr requires percent-encoding (spaces → `%20`). Marked with `// HAND-PATCHED:` comment.

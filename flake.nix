@@ -64,7 +64,7 @@
           commonArgs
           // {
             pname = "doplarr";
-            cargoExtraArgs = "-p doplarr";
+            cargoExtraArgs = "-p doplarr -p seerr_api";
             GIT_HASH = gitRev;
           }
         );

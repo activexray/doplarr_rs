@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     #[serde(rename = "id")]
     pub id: i32,
-    #[serde(rename = "email")]
+    #[serde(rename = "email", default)]
     pub email: String,
     #[serde(rename = "username", skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,

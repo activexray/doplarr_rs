@@ -32,6 +32,19 @@ fn log_api_error(err: &SportarrApiError, context: &str) {
     }
 }
 
+fn api_error(err: SportarrApiError, context: &str) -> anyhow::Error {
+    log_api_error(&err, context);
+    match err {
+        SportarrApiError::Reqwest(err) => err.into(),
+        SportarrApiError::Serde(err) => err.into(),
+        SportarrApiError::ResponseError(response) => {
+            let status = response.status;
+            anyhow::Error::from(SportarrApiError::ResponseError(response))
+                .context(BackendHttpError(status))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Sportarr {
     config: Configuration,
@@ -95,9 +108,9 @@ impl Sportarr {
         };
 
         // This will fail fast if the server is unreachable or the key is wrong
-        let mut quality_profiles = api_qualityprofile_get(&config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to get quality profiles from Sportarr");
-        })?;
+        let mut quality_profiles = api_qualityprofile_get(&config)
+            .await
+            .map_err(|e| api_error(e, "Failed to get quality profiles from Sportarr"))?;
         debug!("Retrieved {} quality profiles", quality_profiles.len());
 
         // Pin the quality profile if configured
@@ -169,15 +182,13 @@ impl MediaBackend for Sportarr {
         info!("Searching Sportarr for league: {}", term);
         let results = api_leagues_search_get(&self.config, term)
             .await
-            .inspect_err(|e| {
-                log_api_error(e, "Failed to search Sportarr");
-            })?;
+            .map_err(|e| api_error(e, "Failed to search Sportarr"))?;
         debug!("Found {} league results", results.len());
 
         // Cross-reference the library so already-added leagues are known
-        let library = api_leagues_get(&self.config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to list Sportarr library leagues");
-        })?;
+        let library = api_leagues_get(&self.config)
+            .await
+            .map_err(|e| api_error(e, "Failed to list Sportarr library leagues"))?;
 
         Ok(results
             .into_iter()
@@ -306,9 +317,7 @@ impl MediaBackend for Sportarr {
 
         api_leagues_post(&self.config, &body)
             .await
-            .inspect_err(|e| {
-                log_api_error(e, "Failed to add league to Sportarr");
-            })?;
+            .map_err(|e| api_error(e, "Failed to add league to Sportarr"))?;
 
         Ok(())
     }

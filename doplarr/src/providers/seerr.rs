@@ -41,6 +41,22 @@ fn log_api_error<T: std::fmt::Debug>(err: &SeerrApiError<T>, context: &str) {
 }
 
 /// Log the API error details, then convert to anyhow for propagation.
+fn api_error<E>(err: SeerrApiError<E>, context: &str) -> anyhow::Error
+where
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    log_api_error(&err, context);
+    let status = match &err {
+        SeerrApiError::ResponseError(response) => Some(response.status),
+        _ => None,
+    };
+    let err = anyhow::Error::from(err);
+    match status {
+        Some(status) => err.context(BackendHttpError(status)),
+        None => err,
+    }
+}
+
 const ENRICHED_KEY: &str = "seerr:enriched";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,10 +71,7 @@ fn require<T, E>(result: std::result::Result<T, SeerrApiError<E>>, context: &str
 where
     E: std::fmt::Debug + Send + Sync + 'static,
 {
-    result.map_err(|e| {
-        log_api_error(&e, context);
-        anyhow::Error::from(e)
-    })
+    result.map_err(|e| api_error(e, context))
 }
 
 fn tolerate_response_parse_error<T, E>(
@@ -77,10 +90,7 @@ where
             );
             Ok(None)
         }
-        Err(e) => {
-            log_api_error(&e, context);
-            Err(e.into())
-        }
+        Err(e) => Err(api_error(e, context)),
     }
 }
 

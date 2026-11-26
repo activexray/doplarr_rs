@@ -41,6 +41,22 @@ fn log_api_error<T: std::fmt::Debug>(err: &SonarrApiError<T>, context: &str) {
     }
 }
 
+fn api_error<E>(err: SonarrApiError<E>, context: &str) -> anyhow::Error
+where
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    log_api_error(&err, context);
+    let status = match &err {
+        SonarrApiError::ResponseError(response) => Some(response.status),
+        _ => None,
+    };
+    let err = anyhow::Error::from(err);
+    match status {
+        Some(status) => err.context(BackendHttpError(status)),
+        None => err,
+    }
+}
+
 /// Treat a 2xx response whose body fails to parse as success - by the time we're
 /// reading the body, Sonarr has already applied the change
 fn tolerate_response_parse_error<T, E>(
@@ -59,10 +75,7 @@ where
             );
             Ok(None)
         }
-        Err(e) => {
-            log_api_error(&e, context);
-            Err(e.into())
-        }
+        Err(e) => Err(api_error(e, context)),
     }
 }
 
@@ -130,14 +143,14 @@ impl Sonarr {
         // Grab the additional details and use the config data to filter
 
         // First query the things we have to check (this will fail if we can't connect to the server anyway)
-        let mut rootfolders = api_v3_rootfolder_get(&config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to get root folders from Sonarr");
-        })?;
+        let mut rootfolders = api_v3_rootfolder_get(&config)
+            .await
+            .map_err(|e| api_error(e, "Failed to get root folders from Sonarr"))?;
         trace!("Retrieved {} root folders", rootfolders.len());
 
-        let mut quality_profiles = api_v3_qualityprofile_get(&config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to get quality profiles from Sonarr");
-        })?;
+        let mut quality_profiles = api_v3_qualityprofile_get(&config)
+            .await
+            .map_err(|e| api_error(e, "Failed to get quality profiles from Sonarr"))?;
         trace!("Retrieved {} quality profiles", quality_profiles.len());
 
         // Select rootfolder if given
@@ -532,9 +545,7 @@ impl MediaBackend for Sonarr {
         info!("Searching Sonarr for series: {}", term);
         let results = api_v3_series_lookup_get(&self.config, Some(term))
             .await
-            .inspect_err(|e| {
-                log_api_error(e, "Failed to search Sonarr");
-            })?;
+            .map_err(|e| api_error(e, "Failed to search Sonarr"))?;
         debug!("Found {} series results", results.len());
         Ok(results
             .into_iter()
@@ -678,9 +689,7 @@ impl MediaBackend for Sonarr {
             // Get the current series data
             let mut existing_series = api_v3_series_id_get(&self.config, id, None)
                 .await
-                .inspect_err(|e| {
-                    log_api_error(e, "Failed to get existing series from Sonarr");
-                })?;
+                .map_err(|e| api_error(e, "Failed to get existing series from Sonarr"))?;
 
             // Determine which seasons still need monitoring (additive only).
             // For "All Seasons" that's every currently-unmonitored season

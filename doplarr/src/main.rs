@@ -3,8 +3,8 @@ use clap::Parser;
 use config::{Backend, BackendConfig};
 use discord::InteractionContinue;
 use providers::{
-    MediaBackend, UserFacingError, radarr::Radarr, seerr::Seerr as SeerrBackend, sonarr::Sonarr,
-    sportarr::Sportarr,
+    BackendHttpError, MediaBackend, UserFacingError, radarr::Radarr, seerr::Seerr as SeerrBackend,
+    sonarr::Sonarr, sportarr::Sportarr,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -35,20 +35,29 @@ fn user_facing_error(err: &anyhow::Error) -> String {
         return e.0.clone();
     }
 
-    let err_msg = err.to_string().to_lowercase();
+    let transport = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<reqwest::Error>());
+    let status = err
+        .downcast_ref::<BackendHttpError>()
+        .map(|e| e.0)
+        .or_else(|| transport.and_then(reqwest::Error::status));
 
-    if err_msg.contains("timeout") || err_msg.contains("timed out") {
+    if transport.is_some_and(reqwest::Error::is_timeout) {
         "Request timed out. The backend server may be slow or unavailable."
-    } else if err_msg.contains("connection") || err_msg.contains("connect") {
+    } else if transport.is_some_and(reqwest::Error::is_connect) {
         "Could not connect to the backend server. Please try again later."
-    } else if err_msg.contains("401")
-        || err_msg.contains("403")
-        || err_msg.contains("unauthorized")
-        || err_msg.contains("forbidden")
-    {
+    } else if matches!(
+        status,
+        Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
+    ) {
         "Backend authentication error. Please contact your administrator."
-    } else if err_msg.contains("500") || err_msg.contains("502") || err_msg.contains("503") {
+    } else if status.is_some_and(|status| status.is_server_error()) {
         "The backend server encountered an error. Please try again later."
+    } else if err.chain().any(|cause| cause.is::<serde_json::Error>())
+        || transport.is_some_and(reqwest::Error::is_decode)
+    {
+        "The backend returned an invalid response. Please contact your administrator."
     } else {
         "An error occurred while processing your request. Please try again or contact your administrator."
     }
@@ -404,4 +413,234 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+    use serde_json::json;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+    };
+
+    const AUTH_ERROR: &str = "Backend authentication error. Please contact your administrator.";
+    const INVALID_RESPONSE: &str =
+        "The backend returned an invalid response. Please contact your administrator.";
+    const SERVER_ERROR: &str = "The backend server encountered an error. Please try again later.";
+    const GENERIC_ERROR: &str = "An error occurred while processing your request. Please try again or contact your administrator.";
+
+    async fn mock_response(
+        status: StatusCode,
+        body: &str,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status,
+            body.len(),
+            body,
+        );
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            while !request.ends_with("\r\n\r\n") {
+                assert!(stream.read_line(&mut request).await.unwrap() > 0);
+            }
+            stream
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        });
+        (url, server)
+    }
+
+    async fn connect_backend(
+        backend: &str,
+        url: &str,
+        client: reqwest::Client,
+    ) -> anyhow::Result<()> {
+        let config: BackendConfig = serde_json::from_value(json!({
+            (backend): {"url": url, "api_key": "test-key"}
+        }))
+        .unwrap();
+        match backend {
+            "Seerr" => SeerrBackend::connect(config, client).await.map(|_| ()),
+            "Radarr" => Radarr::connect(config, client).await.map(|_| ()),
+            "Sonarr" => Sonarr::connect(config, client).await.map(|_| ()),
+            "Sportarr" => Sportarr::connect(config, client).await.map(|_| ()),
+            _ => unreachable!(),
+        }
+    }
+
+    async fn backend_error(backend: &str, status: StatusCode, body: &str) -> anyhow::Error {
+        let (url, server) = mock_response(status, body).await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let result = connect_backend(backend, &url, client).await;
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        result.unwrap_err().context("Connecting to backend")
+    }
+
+    #[test]
+    fn deserialization_columns_are_not_http_status_codes() {
+        #[derive(Debug, serde::Deserialize)]
+        struct EmbeddedUser {
+            #[serde(rename = "email")]
+            _email: String,
+        }
+
+        let payload = "{}";
+        for column in [1274018, 403, 500, 502, 503] {
+            let body = format!("{}{}", " ".repeat(column - payload.len()), payload);
+            let parse_error = serde_json::from_str::<EmbeddedUser>(&body).unwrap_err();
+            assert_eq!(parse_error.column(), column);
+            let error = anyhow::Error::from(seerr_api::apis::Error::<()>::Serde(parse_error));
+            assert_eq!(user_facing_error(&error), INVALID_RESPONSE);
+            assert_eq!(
+                user_facing_error(&error.context("Fetching TV details")),
+                INVALID_RESPONSE
+            );
+        }
+    }
+
+    #[test]
+    fn error_text_is_not_used_to_guess_backend_failures() {
+        for text in [
+            "1274018",
+            "401",
+            "403",
+            "500",
+            "502",
+            "503",
+            "unauthorized",
+            "forbidden",
+            "connection",
+            "timeout",
+        ] {
+            let error = anyhow::anyhow!("Unexpected field: {text}");
+            assert_eq!(user_facing_error(&error), GENERIC_ERROR);
+        }
+    }
+
+    #[test]
+    fn explicit_user_facing_errors_take_priority() {
+        let error = anyhow::Error::from(UserFacingError("No seasons were selected.".into()))
+            .context("Request failed with status 401");
+        assert_eq!(user_facing_error(&error), "No seasons were selected.");
+    }
+
+    #[tokio::test]
+    async fn actual_http_status_is_preserved_by_every_backend() {
+        for backend in ["Seerr", "Radarr", "Sonarr", "Sportarr"] {
+            for (status, expected) in [
+                (StatusCode::UNAUTHORIZED, AUTH_ERROR),
+                (StatusCode::FORBIDDEN, AUTH_ERROR),
+                (StatusCode::INTERNAL_SERVER_ERROR, SERVER_ERROR),
+                (StatusCode::BAD_GATEWAY, SERVER_ERROR),
+                (StatusCode::SERVICE_UNAVAILABLE, SERVER_ERROR),
+                (StatusCode::GATEWAY_TIMEOUT, SERVER_ERROR),
+                (StatusCode::NOT_FOUND, GENERIC_ERROR),
+            ] {
+                let error = backend_error(
+                    backend,
+                    status,
+                    r#"{"message":"401 403 500 unauthorized forbidden connection timeout"}"#,
+                )
+                .await;
+                assert_eq!(user_facing_error(&error), expected, "{backend}: {status}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_success_responses_are_reported_by_every_backend() {
+        for backend in ["Seerr", "Radarr", "Sonarr", "Sportarr"] {
+            let error = backend_error(
+                backend,
+                StatusCode::OK,
+                "unauthorized connection timeout 401 500",
+            )
+            .await;
+            assert_eq!(user_facing_error(&error), INVALID_RESPONSE, "{backend}");
+        }
+    }
+
+    #[tokio::test]
+    async fn reqwest_status_errors_are_classified_without_parsing_text() {
+        let (url, server) = mock_response(StatusCode::UNAUTHORIZED, "{}").await;
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap_err();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let error = anyhow::Error::from(error).context("Fetching backend response");
+        assert_eq!(user_facing_error(&error), AUTH_ERROR);
+    }
+
+    #[tokio::test]
+    async fn reqwest_timeouts_are_preserved_through_error_context() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap_err();
+        server.abort();
+        let error = anyhow::Error::from(seerr_api::apis::Error::<()>::Reqwest(error))
+            .context("Fetching backend response");
+        assert_eq!(
+            user_facing_error(&error),
+            "Request timed out. The backend server may be slow or unavailable."
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_failures_are_reported_by_every_backend() {
+        let url = "http://127.0.0.1:0";
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        for backend in ["Seerr", "Radarr", "Sonarr", "Sportarr"] {
+            let error = connect_backend(backend, url, client.clone())
+                .await
+                .unwrap_err()
+                .context("Fetching backend response");
+            assert_eq!(
+                user_facing_error(&error),
+                "Could not connect to the backend server. Please try again later.",
+                "{backend}"
+            );
+        }
+    }
 }

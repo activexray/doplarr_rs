@@ -41,6 +41,22 @@ fn log_api_error<T: std::fmt::Debug>(err: &RadarrApiError<T>, context: &str) {
     }
 }
 
+fn api_error<E>(err: RadarrApiError<E>, context: &str) -> anyhow::Error
+where
+    E: std::fmt::Debug + Send + Sync + 'static,
+{
+    log_api_error(&err, context);
+    let status = match &err {
+        RadarrApiError::ResponseError(response) => Some(response.status),
+        _ => None,
+    };
+    let err = anyhow::Error::from(err);
+    match status {
+        Some(status) => err.context(BackendHttpError(status)),
+        None => err,
+    }
+}
+
 /// Treat a 2xx response whose body fails to parse as success - by the time we're
 /// reading the body, Radarr has already applied the change
 fn tolerate_response_parse_error<T, E>(
@@ -59,10 +75,7 @@ where
             );
             Ok(None)
         }
-        Err(e) => {
-            log_api_error(&e, context);
-            Err(e.into())
-        }
+        Err(e) => Err(api_error(e, context)),
     }
 }
 
@@ -118,14 +131,14 @@ impl Radarr {
         // Grab the additional details and use the config data to filter
 
         // First query the things we have to check (this will fail if we can't connect to the server anyway)
-        let mut rootfolders = api_v3_rootfolder_get(&config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to get root folders from Radarr");
-        })?;
+        let mut rootfolders = api_v3_rootfolder_get(&config)
+            .await
+            .map_err(|e| api_error(e, "Failed to get root folders from Radarr"))?;
         trace!("Retrieved {} root folders", rootfolders.len());
 
-        let mut quality_profiles = api_v3_qualityprofile_get(&config).await.inspect_err(|e| {
-            log_api_error(e, "Failed to get quality profiles from Radarr");
-        })?;
+        let mut quality_profiles = api_v3_qualityprofile_get(&config)
+            .await
+            .map_err(|e| api_error(e, "Failed to get quality profiles from Radarr"))?;
         trace!("Retrieved {} quality profiles", quality_profiles.len());
 
         // Select rootfolder if given
@@ -600,9 +613,7 @@ impl MediaBackend for Radarr {
         info!("Searching Radarr for movie: {}", term);
         let results = api_v3_movie_lookup_get(&self.config, Some(term))
             .await
-            .inspect_err(|e| {
-                log_api_error(e, "Failed to search Radarr");
-            })?;
+            .map_err(|e| api_error(e, "Failed to search Radarr"))?;
         debug!("Found {} movie results", results.len());
         Ok(results
             .into_iter()

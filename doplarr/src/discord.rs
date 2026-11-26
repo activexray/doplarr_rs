@@ -68,6 +68,19 @@ fn truncate_text(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
+/// Discord's maximum length for a select option's label and description
+const MAX_SELECT_OPTION_LENGTH: usize = 100;
+
+/// Truncate to at most `max` characters (Discord counts characters, not bytes)
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
 /// Build the comand object, used to register with Discord what slash commands are available
 pub fn commands<T: AsRef<str>>(media_kinds: impl IntoIterator<Item = T>) -> Command {
     let query = StringBuilder::new(QUERY_COMMAND_NAME, "search query").required(true);
@@ -225,10 +238,11 @@ fn dropdown_options_to_select_menu<T: AsRef<str>>(
     }
 
     for (i, option) in options.into_iter().enumerate() {
-        let mut menu_option = SelectMenuOptionBuilder::new(option.title, i.to_string())
+        let label = truncate_chars(&option.title, MAX_SELECT_OPTION_LENGTH);
+        let mut menu_option = SelectMenuOptionBuilder::new(label, i.to_string())
             .default(selected_indices.contains(&i));
         if let Some(x) = option.description {
-            menu_option = menu_option.description(x);
+            menu_option = menu_option.description(truncate_chars(&x, MAX_SELECT_OPTION_LENGTH));
         }
         menu = menu.option(menu_option);
     }
@@ -889,4 +903,19 @@ pub async fn run_interaction(
 
     info!("Interaction flow completed successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_counts_characters_not_bytes() {
+        let title = "Bogus Skill ＜＜Fruitmaster＞＞ ~About that time I became able to eat unlimited numbers of Skill Fruits (that kill you)~";
+        assert!(title.chars().count() > MAX_SELECT_OPTION_LENGTH);
+        let out = truncate_chars(title, MAX_SELECT_OPTION_LENGTH);
+        assert_eq!(out.chars().count(), MAX_SELECT_OPTION_LENGTH);
+        assert!(out.ends_with('…'));
+        assert_eq!(truncate_chars("short", MAX_SELECT_OPTION_LENGTH), "short");
+    }
 }

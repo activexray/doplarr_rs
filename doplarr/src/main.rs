@@ -509,6 +509,7 @@ mod tests {
     async fn backend_error(backend: &str, status: StatusCode, body: &str) -> anyhow::Error {
         let (url, server) = mock_response(status, body).await;
         let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true) // skip system CA load (Nix sandbox)
             .no_proxy()
             .timeout(Duration::from_secs(5))
             .build()
@@ -609,6 +610,7 @@ mod tests {
     async fn reqwest_status_errors_are_classified_without_parsing_text() {
         let (url, server) = mock_response(StatusCode::UNAUTHORIZED, "{}").await;
         let error = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true) // skip system CA load (Nix sandbox)
             .no_proxy()
             .build()
             .unwrap()
@@ -635,6 +637,7 @@ mod tests {
             std::future::pending::<()>().await;
         });
         let error = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true) // skip system CA load (Nix sandbox)
             .no_proxy()
             .timeout(Duration::from_millis(100))
             .build()
@@ -656,6 +659,7 @@ mod tests {
     async fn connection_failures_are_reported_by_every_backend() {
         let url = "http://127.0.0.1:0";
         let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true) // skip system CA load (Nix sandbox)
             .no_proxy()
             .timeout(Duration::from_secs(5))
             .build()

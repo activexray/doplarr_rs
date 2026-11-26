@@ -133,12 +133,15 @@ impl Seerr {
         let base_path = format!("{}/api/v1", url.trim_end_matches('/'));
         let config = Configuration {
             base_path,
+            user_agent: None,
             client,
+            basic_auth: None,
+            oauth_access_token: None,
+            bearer_access_token: None,
             api_key: Some(ApiKey {
                 prefix: None,
                 key: api_key,
             }),
-            ..Default::default()
         };
 
         require(auth_me_get(&config).await, "Seerr auth validation")?;

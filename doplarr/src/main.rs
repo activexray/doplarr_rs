@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
 use clap::Parser;
 use config::{Backend, BackendConfig};
-use discord::InteractionContinue;
+use discord::{InteractionContinue, InteractionNotAcknowledged};
 use providers::{
     BackendHttpError, MediaBackend, UserFacingError, radarr::Radarr, seerr::Seerr as SeerrBackend,
     sonarr::Sonarr, sportarr::Sportarr,
@@ -339,6 +339,11 @@ async fn main() -> anyhow::Result<()> {
                                     // a real error worth an admin's attention.
                                     if e.downcast_ref::<UserFacingError>().is_some() {
                                         info!(uuid = %uuid, reason = %e, "Interaction ended with a user-facing message");
+                                    } else if e.downcast_ref::<InteractionNotAcknowledged>().is_some() {
+                                        // No response exists to edit, so there's nobody to tell
+                                        error!(uuid = %uuid, error = ?e, "Could not acknowledge interaction");
+                                        in_progress.lock().await.remove(&uuid);
+                                        return;
                                     } else {
                                         error!(uuid = %uuid, error = ?e, "Failed to run coroutine to completion");
                                     }

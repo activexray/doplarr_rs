@@ -530,6 +530,24 @@ fn build_success_embed(data: &EmbedData) -> Embed {
     }
 }
 
+/// The initial acknowledgement was rejected, so there is no response message
+/// to edit and no way to tell the user about the failure
+#[derive(Debug)]
+pub struct InteractionNotAcknowledged;
+
+impl std::fmt::Display for InteractionNotAcknowledged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Discord rejected the initial acknowledgement. Either the interaction \
+             arrived after Discord's 3 second window, or another bot process using \
+             the same token answered it first"
+        )
+    }
+}
+
+impl std::error::Error for InteractionNotAcknowledged {}
+
 #[derive(Debug)]
 /// Data needed to start an interaction flow
 pub struct InteractionStart {
@@ -588,7 +606,9 @@ pub async fn run_interaction(
 
     // Send the "thinking" ack so we can take some time to actually perform the request
     // This is done over the HTTP client connection
-    send_thinking(&discord_http, application_id, interaction_id, &token).await?;
+    send_thinking(&discord_http, application_id, interaction_id, &token)
+        .await
+        .context(InteractionNotAcknowledged)?;
 
     debug!(query = %query, "Performing search");
     let mut results = backend.search(&query).await?;

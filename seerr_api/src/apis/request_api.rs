@@ -249,6 +249,18 @@ pub async fn request_post(
         .unwrap_or("application/octet-stream");
     let content_type = super::ContentType::from(content_type);
 
+    // HAND-PATCHED: Seerr refuses some requests (e.g. "No seasons available to
+    // request") with 202 and a {"message": ...} body. Nothing was created, so
+    // surface it as a response error instead of a MediaRequest parse failure.
+    if status == reqwest::StatusCode::ACCEPTED {
+        let content = resp.text().await?;
+        return Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity: None,
+        }));
+    }
+
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
         match content_type {

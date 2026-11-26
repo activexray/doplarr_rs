@@ -624,10 +624,22 @@ impl MediaBackend for Seerr {
         req.is4k = Some(is_4k);
         req.seasons = seasons.map(Box::new);
 
-        tolerate_response_parse_error(
-            request_post(&self.config, req, Some(seerr_user_id)).await,
-            "Seerr request",
-        )?;
+        let response = request_post(&self.config, req, Some(seerr_user_id)).await;
+
+        // Seerr answers 202 when it declined to file anything (e.g. every
+        // selected season is already requested), so report that, not success
+        if let Err(SeerrApiError::ResponseError(r)) = &response
+            && r.status == reqwest::StatusCode::ACCEPTED
+        {
+            let reason = serde_json::from_str::<serde_json::Value>(&r.content)
+                .ok()
+                .and_then(|v| v.get("message")?.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "Seerr declined the request".to_owned());
+            info!(reason = %reason, "Seerr declined the request");
+            bail!(UserFacingError(format!("Not requested: {reason}")));
+        }
+
+        tolerate_response_parse_error(response, "Seerr request")?;
         Ok(())
     }
 

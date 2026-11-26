@@ -34,10 +34,14 @@ public_followup = true
 # ==============================================================================
 # BACKENDS
 # ==============================================================================
-# Each [[backends]] entry creates a Discord slash command: /request <media>
+# Each [[backends]] entry creates one or more Discord slash commands: /request <media>
 #
 # Key concepts:
-# - "media" is the slash command name (must be unique)
+# - "media" is the slash command name(s): a single string, or an array of strings (each must be unique)
+#
+# Examples:
+#   media = "movie"            -> Single command
+#   media = ["movie", "films"] -> Multiple commands pointing to the same backend
 # - You can have multiple backends of the same type (Radarr/Sonarr)
 # - Backends can point to the same instance with different settings
 #
@@ -156,7 +160,7 @@ api_key = "your_sonarr_api_key"
 # and enter their Discord User ID.
 
 # [[backends]]
-# media = "media"
+# media = ["media", "movies", "tv"]
 #
 # [backends.config.Seerr]
 # url = "http://localhost:5055"
